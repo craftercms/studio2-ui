@@ -56,7 +56,7 @@ import { getStoredPathNavigatorTree } from '../../utils/state';
 import GlobalState from '../../models/GlobalState';
 import { nnou } from '../../utils/object';
 import PathNavigatorSkeletonTree from './PathNavigatorTreeSkeleton';
-import { getParentPath } from '../../utils/path';
+import { getParentPath, withIndex, withoutIndex } from '../../utils/path';
 import { DetailedItem } from '../../models/Item';
 import { fetchContentXML } from '../../services/content';
 import { SystemIconDescriptor } from '../SystemIcon';
@@ -117,7 +117,6 @@ export default function PathNavigatorTree(props: PathNavigatorTreeProps) {
   const {
     label,
     id = props.label.replace(/\s/g, ''),
-    rootPath,
     excludes,
     limit = 10,
     backgroundRefreshTimeoutMs = 60000,
@@ -133,7 +132,9 @@ export default function PathNavigatorTree(props: PathNavigatorTreeProps) {
   const childrenByParentPath = state?.childrenByParentPath;
   const keywordByPath = state?.keywordByPath;
   const totalByPath = state?.totalByPath;
-  const rootItem = itemsByPath?.[rootPath];
+  const rootItem = lookupItemByPath(props.rootPath, itemsByPath);
+  const rootPath = rootItem?.path ?? props.rootPath;
+
   const [rootNode, setRootNode] = useState(null);
   const [widgetMenu, setWidgetMenu] = useState<Menu>({
     anchorEl: null,
@@ -174,6 +175,17 @@ export default function PathNavigatorTree(props: PathNavigatorTreeProps) {
     fetchingPathsRef.current = [];
   }
 
+  useMount(() => {
+    if (state) {
+      // If the state is being restored from redux, fetchingPathsRef is being processed.
+      // Added a timeout to trigger the process again with a new fetchingPathsRef
+      setTimeout(() => {
+        state.expanded.forEach((path) => fetchingPathsRef.current.push(path));
+        dispatch(pathNavigatorTreeBackgroundRefresh({ id }));
+      });
+    }
+  });
+
   useEffect(() => {
     // Adding uiConfig as means to stop navigator from trying to
     // initialize with previous state information when switching sites
@@ -197,13 +209,6 @@ export default function PathNavigatorTree(props: PathNavigatorTreeProps) {
       );
     }
   }, [site, user.username, id, dispatch, rootPath, excludes, limit, state, uiConfig.currentSite, storedState]);
-
-  useMount(() => {
-    if (state) {
-      state.expanded.forEach((path) => fetchingPathsRef.current.push(path));
-      dispatch(pathNavigatorTreeBackgroundRefresh({ id }));
-    }
-  });
 
   useEffect(() => {
     if (rootItem) {
@@ -412,11 +417,19 @@ export default function PathNavigatorTree(props: PathNavigatorTreeProps) {
     return () => {
       subscription.unsubscribe();
     };
-  }, [id, dispatch, rootPath, totalByPath, limit, childrenByParentPath, state?.expanded]);
+  }, [id, rootPath, dispatch, totalByPath, limit, childrenByParentPath, state?.expanded]);
   // endregion
 
   if (!rootItem || !Boolean(state) || !rootNode) {
-    return <PathNavigatorSkeletonTree numOfItems={storedState.expanded?.includes(rootPath) ? 5 : 1} />;
+    return (
+      <PathNavigatorSkeletonTree
+        numOfItems={
+          storedState.expanded?.includes(withIndex(rootPath)) || storedState.expanded?.includes(withoutIndex(rootPath))
+            ? 5
+            : 1
+        }
+      />
+    );
   }
 
   // region Handlers
@@ -495,6 +508,8 @@ export default function PathNavigatorTree(props: PathNavigatorTreeProps) {
     onCloseWidgetOptions();
     if (option === 'refresh') {
       state.expanded.forEach((path) => fetchingPathsRef.current.push(path));
+      console.log(state);
+      console.log(fetchingPathsRef.current.join(', '));
       dispatch(
         pathNavigatorTreeRefresh({
           id
