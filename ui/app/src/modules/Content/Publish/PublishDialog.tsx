@@ -75,6 +75,8 @@ interface PublishDialogContentUIProps {
   publishingChannelsStatus: string;
   onPublishingChannelsFailRetry: Function;
   apiState: any;
+  mixedPublishingDates?: boolean;
+  mixedPublishingTargets?: boolean;
 }
 
 interface PublishDialogUIProps {
@@ -105,11 +107,14 @@ interface PublishDialogUIProps {
   apiState: any;
   classes?: any;
   submitLabel: ReactNode;
+  mixedPublishingDates?: boolean;
+  mixedPublishingTargets?: boolean;
 }
 
 interface PublishDialogBaseProps {
   open: boolean;
   items?: DetailedItem[];
+  // if null it means the dialog should determinate which one to use
   scheduling?: 'now' | 'custom';
 }
 
@@ -251,7 +256,9 @@ function PublishDialogContentUI(props: PublishDialogContentUIProps) {
     showRequestApproval,
     publishingChannelsStatus,
     onPublishingChannelsFailRetry,
-    apiState
+    apiState,
+    mixedPublishingDates,
+    mixedPublishingTargets
   } = props;
 
   const { items, publishingChannels }: { items: DetailedItem[]; publishingChannels: any } = resource.read();
@@ -285,6 +292,8 @@ function PublishDialogContentUI(props: PublishDialogContentUIProps) {
             publishingChannelsStatus={publishingChannelsStatus}
             onPublishingChannelsFailRetry={onPublishingChannelsFailRetry}
             disabled={apiState.submitting}
+            mixedPublishingDates={mixedPublishingDates}
+            mixedPublishingTargets={mixedPublishingTargets}
           />
         </Grid>
       </Grid>
@@ -320,7 +329,9 @@ function PublishDialogUI(props: PublishDialogUIProps) {
     showRequestApproval,
     apiState,
     classes,
-    submitLabel
+    submitLabel,
+    mixedPublishingDates,
+    mixedPublishingTargets
   } = props;
 
   return (
@@ -357,6 +368,8 @@ function PublishDialogUI(props: PublishDialogUIProps) {
             publishingChannelsStatus={publishingChannelsStatus}
             onPublishingChannelsFailRetry={onPublishingChannelsFailRetry}
             apiState={apiState}
+            mixedPublishingDates={mixedPublishingDates}
+            mixedPublishingTargets={mixedPublishingTargets}
           />
         </SuspenseWithEmptyState>
       </DialogBody>
@@ -374,7 +387,7 @@ function PublishDialogUI(props: PublishDialogUIProps) {
         </SecondaryButton>
         <PrimaryButton
           onClick={handleSubmit}
-          disabled={submitDisabled || apiState.submitting}
+          disabled={submitDisabled || apiState.submitting || dialog.environment === ''}
           loading={apiState.submitting}
         >
           {submitLabel}
@@ -399,7 +412,7 @@ export default function PublishDialog(props: PublishDialogProps) {
 }
 
 function PublishDialogWrapper(props: PublishDialogProps) {
-  const { items, scheduling = 'now', onDismiss, onSuccess } = props;
+  const { items, scheduling, onDismiss, onSuccess } = props;
   const [dialog, setDialog] = useSpreadState<InternalDialogState>({ ...dialogInitialState, scheduling });
   const [publishingChannels, setPublishingChannels] = useState<{ name: string }[]>(null);
   const [publishingChannelsStatus, setPublishingChannelsStatus] = useState('Loading');
@@ -425,6 +438,42 @@ function PublishDialogWrapper(props: PublishDialogProps) {
   const user = useSelector<GlobalState, GlobalState['user']>((state) => state.user);
   const submit = !hasPublishPermission || dialog.requestApproval ? submitToGoLive : goLive;
   const propagateAction = !hasPublishPermission || dialog.requestApproval ? itemsScheduled : itemsApproved;
+  const { mixedPublishingTargets, mixedPublishingDates, dateScheduled, environment } = useMemo(() => {
+    let mixedPublishingTargets = false;
+    let mixedPublishingDates = false;
+    let dateScheduled = null;
+    let environment = '';
+    items.reduce((prev, current) => {
+      if (prev.stateMap.live !== current.stateMap.live) {
+        mixedPublishingTargets = true;
+        environment = '';
+      }
+      if (prev.live.dateScheduled !== current.live.dateScheduled) {
+        mixedPublishingDates = true;
+      }
+      if (dateScheduled === null) {
+        dateScheduled = prev.live.dateScheduled ? prev.live.dateScheduled : current.live.dateScheduled;
+      }
+      if (environment === '' && mixedPublishingTargets === false) {
+        environment = prev.stateMap.submittedToLive ? 'live' : prev.stateMap.submittedToStaging ? 'staging' : '';
+      }
+      return current;
+    });
+
+    return {
+      mixedPublishingTargets,
+      mixedPublishingDates,
+      environment:
+        items.length > 1
+          ? environment
+          : items[0].stateMap.submittedToLive
+          ? 'live'
+          : items[0].stateMap.submittedToStaging
+          ? 'staging'
+          : '',
+      dateScheduled: items.length > 1 ? dateScheduled : items[0].live.dateScheduled
+    };
+  }, [items]);
 
   const { formatMessage } = useIntl();
 
@@ -498,13 +547,23 @@ function PublishDialogWrapper(props: PublishDialogProps) {
   }, [scheduling, setDialog]);
 
   useEffect(() => {
-    if (items.length === 1 && items[0].live?.dateScheduled) {
+    if (dateScheduled && scheduling !== 'now') {
       setDialog({
         scheduling: 'custom',
-        scheduledDateTime: moment(items[0].live.dateScheduled).format()
+        environment,
+        scheduledDateTime: moment(dateScheduled).format()
+      });
+    } else if (dateScheduled === null && scheduling === null) {
+      setDialog({
+        scheduling: 'now',
+        environment
+      });
+    } else {
+      setDialog({
+        environment
       });
     }
-  }, [items, setDialog]);
+  }, [dateScheduled, environment, setDialog, scheduling]);
 
   useEffect(() => {
     if (!apiState.submitting && Object.values(checkedItems).filter(Boolean).length > 0 && publishingChannels?.length) {
@@ -627,7 +686,7 @@ function PublishDialogWrapper(props: PublishDialogProps) {
       apiState={apiState}
       classes={useStyles()}
       showEmailCheckbox={!hasPublishPermission || dialog.requestApproval}
-      showRequestApproval={hasPublishPermission && items.every((item) => !item.availableActionsMap.approvePublish)}
+      showRequestApproval={hasPublishPermission && items.every((item) => !item.stateMap.submitted)}
       submitLabel={
         dialog.scheduling === 'custom' ? (
           <FormattedMessage id="requestPublishDialog.schedule" defaultMessage="Schedule" />
@@ -637,6 +696,8 @@ function PublishDialogWrapper(props: PublishDialogProps) {
           <FormattedMessage id="requestPublishDialog.publish" defaultMessage="Publish" />
         )
       }
+      mixedPublishingTargets={mixedPublishingTargets}
+      mixedPublishingDates={mixedPublishingDates}
     />
   );
 }

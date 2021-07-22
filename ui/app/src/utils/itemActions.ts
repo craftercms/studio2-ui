@@ -471,9 +471,9 @@ export const itemActionDispatcher = ({
   authoringBase: string;
   dispatch;
   formatMessage;
-  clipboard;
+  clipboard?;
   onActionSuccess?: any;
-  event: React.MouseEvent<Element, MouseEvent>;
+  event?: React.MouseEvent<Element, MouseEvent>;
 }) => {
   // actions that support only one item
   if (!Array.isArray(item)) {
@@ -805,10 +805,16 @@ export const itemActionDispatcher = ({
     case 'schedulePublish':
     case 'requestPublish': {
       const items = Array.isArray(item) ? item : [item];
+      const schedulingMap = {
+        approvePublish: null,
+        schedulePublish: 'custom',
+        requestPublish: 'now',
+        publish: 'now'
+      };
       dispatch(
         showPublishDialog({
           items,
-          scheduling: option === 'schedulePublish' ? 'custom' : 'now',
+          scheduling: schedulingMap[option],
           onSuccess: batchActions([
             showPublishItemSuccessNotification(),
             ...items.map((item) => reloadDetailedItem({ path: item.path })),
